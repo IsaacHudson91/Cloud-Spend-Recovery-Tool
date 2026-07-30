@@ -1,5 +1,5 @@
 # Build stage: compile C extensions, then discard build tooling
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS builder
+FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS builder
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -13,7 +13,7 @@ COPY templates/ ./templates/
 RUN pip install --no-cache-dir ".[all]"
 
 # Runtime stage: only the installed packages, no build tooling
-FROM python:3.12-slim@sha256:d764629ce0ddd8c71fd371e9901efb324a95789d2315a47db7e4d27e78f1b0e9 AS runtime
+FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS runtime
 WORKDIR /app
 
 # Runtime shared libs needed by some optional connectors
