@@ -1,0 +1,147 @@
+version: "3.9"
+
+services:
+  nable:
+    # Hosted boxes PULL this prebuilt release image from GHCR (built by
+    # .github/workflows/image.yml on every version tag), they do not compile it.
+    # Update flow on a box: `docker compose pull && docker compose up -d`, seconds
+    # not minutes, and every tenant runs the identical tested artifact. Pin a
+    # version with NABLE_VERSION in .env (recommended per tenant); blank = latest.
+    # `build: .` stays as a local-dev fallback (docker compose up --build).
+    build: .
+    image: "ghcr.io/getnable/finops:${NABLE_VERSION:-latest}"
+    ports:
+      # Bind the raw app port to loopback by default so it is never publicly
+      # exposed. Under the tls profile Caddy reaches nable over the compose
+      # network and serves 443; raw 8080 stays private with no auth bypass. For
+      # direct LAN access set FINOPS_BIND_HOST=0.0.0.0 (trusted networks only).
+      - "${FINOPS_BIND_HOST:-127.0.0.1}:${PORT:-8080}:8080"
+    environment:
+      # Persist SQLite + the credential vault into the mounted volume (see
+      # volumes below), not the container's ephemeral home, so cost history,
+      # snapshots, and sessions survive a rebuild / `docker compose up --build`.
+      FINOPS_DATA_DIR: "${FINOPS_DATA_DIR:-/data}"
+      # Credential vault master key (base64 Fernet key). Supply it HERE from the
+      # host .env so it lives on the host root volume, NOT inside the mounted /data
+      # volume next to the encrypted vault.db. A leaked or snapshotted data volume
+      # is then useless on its own. Blank = the app self-manages a key file inside
+      # /data (fine for a laptop, weak for a hosted box). Keep it constant: changing
+      # it orphans every stored credential. deploy/provision-tenant.sh generates one.
+      FINOPS_VAULT_KEY: "${FINOPS_VAULT_KEY:-}"
+      # Dashboard auth
+      FINOPS_DASHBOARD_PASSWORD: "${FINOPS_DASHBOARD_PASSWORD:-}"
+      # Public hostname this instance serves (set by the tls profile). nable
+      # auto-allows it as a valid Host header, so the box answers its own domain
+      # without a separate allowlist entry.
+      DOMAIN: "${DOMAIN:-}"
+      # Extra Host headers to accept beyond localhost + DOMAIN (comma-separated).
+      FINOPS_DASHBOARD_ALLOWED_HOSTS: "${FINOPS_DASHBOARD_ALLOWED_HOSTS:-}"
+      # SSO: set all three to replace password login with your IdP
+      # Supported: Okta, Azure AD (Entra ID), Google Workspace, any OIDC provider
+      FINOPS_SSO_ISSUER: "${FINOPS_SSO_ISSUER:-}"
+      FINOPS_SSO_CLIENT_ID: "${FINOPS_SSO_CLIENT_ID:-}"
+      FINOPS_SSO_CLIENT_SECRET: "${FINOPS_SSO_CLIENT_SECRET:-}"
+      FINOPS_SSO_REDIRECT_URI: "${FINOPS_SSO_REDIRECT_URI:-http://localhost:8080/sso/callback}"
+      FINOPS_SSO_ALLOWED_DOMAINS: "${FINOPS_SSO_ALLOWED_DOMAINS:-}"
+      # Team mode with shared Postgres. The app reads DATABASE_URL; we accept the
+      # operator-facing FINOPS_DATABASE_URL and map it through, so setting it
+      # actually turns on shared Postgres + RBAC. Blank = single-node SQLite.
+      DATABASE_URL: "${FINOPS_DATABASE_URL:-}"
+      FINOPS_REQUIRE_AUTH: "${FINOPS_REQUIRE_AUTH:-0}"
+      # Hosted control-plane login (managed single-tenant). When BOTH are set, the
+      # getnable.com account can mint a one-click login into this instance. Leave
+      # both blank for a self-hosted box (password/SSO login only). The secret is
+      # derived per instance: hmac_sha256_hex(CP_MASTER_SECRET, "nable-instance:"+id).
+      # See docs/PROVISIONING.md and deploy/provision-tenant.sh.
+      FINOPS_INSTANCE_ID: "${FINOPS_INSTANCE_ID:-}"
+      FINOPS_CONTROL_PLANE_SECRET: "${FINOPS_CONTROL_PLANE_SECRET:-}"
+      # --- Finance interfaces (so non-engineers consume nable without installing) ---
+      # Scheduler pushes snapshots, anomaly alerts, and daily/weekly digests.
+      # On by default in the deploy: this is the always-on host, not a laptop.
+      FINOPS_ENABLE_SCHEDULER: "${FINOPS_ENABLE_SCHEDULER:-1}"
+      # Slack bot: finance asks cost questions in Slack. Both tokens required.
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN:-}"            # xoxb-... (OAuth & Permissions)
+      SLACK_APP_TOKEN: "${SLACK_APP_TOKEN:-}"            # xapp-... (App-Level Tokens, Socket Mode)
+      SLACK_ALERT_CHANNEL: "${SLACK_ALERT_CHANNEL:-}"    # e.g. #finops-alerts
+      SLACK_REPORT_CHANNEL: "${SLACK_REPORT_CHANNEL:-}"  # e.g. #finops-reports
+      # Email digests (SMTP). Recipients set in the dashboard or via the
+      # subscribe_to_report tool in Claude.
+      FINOPS_SMTP_HOST: "${FINOPS_SMTP_HOST:-}"
+      FINOPS_SMTP_PORT: "${FINOPS_SMTP_PORT:-587}"
+      FINOPS_SMTP_USER: "${FINOPS_SMTP_USER:-}"
+      FINOPS_SMTP_PASSWORD: "${FINOPS_SMTP_PASSWORD:-}"
+      FINOPS_SMTP_FROM: "${FINOPS_SMTP_FROM:-}"
+      # AWS credentials (or mount ~/.aws as a read-only volume below)
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      # Azure
+      AZURE_SUBSCRIPTION_ID: "${AZURE_SUBSCRIPTION_ID:-}"
+      AZURE_TENANT_ID: "${AZURE_TENANT_ID:-}"
+      AZURE_CLIENT_ID: "${AZURE_CLIENT_ID:-}"
+      AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
+      # GCP
+      GOOGLE_APPLICATION_CREDENTIALS: "${GOOGLE_APPLICATION_CREDENTIALS:-}"
+      # --- AI / agent (powers the Ask tab + the Slack agent) ---
+      # The agent's LLM key: bring-your-own (the customer's) or your managed key.
+      # Without it the Ask tab reports "no AI key configured".
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Caps managed-AI spend per month (USD) so a hosted tenant can't run up your
+      # Anthropic bill. Blank = unmetered (fine for a BYO-key self-hosted box).
+      FINOPS_MANAGED_AI_BUDGET_USD: "${FINOPS_MANAGED_AI_BUDGET_USD:-}"
+    volumes:
+      - nable-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional TLS front door (opt in with `--profile tls`). Puts the dashboard on
+  # the public internet at https://$DOMAIN with an auto-renewing Let's Encrypt
+  # certificate, and sets X-Forwarded-Proto so nable marks session cookies Secure.
+  # Without this profile nable serves plain HTTP on 8080 for local or LAN use,
+  # unchanged. When this is on, close port 8080 at your firewall so the only
+  # public entry is 443. See DEPLOY.md.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:?Set DOMAIN in .env to use the tls profile}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - nable
+    restart: unless-stopped
+
+  # Optional: Postgres for shared team mode.
+  # Remove this service (and depends_on above) if using SQLite or an external DB.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nable
+      POSTGRES_USER: nable
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nable"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  nable-data:
+  pg-data:
+  caddy-data:
+  caddy-config:

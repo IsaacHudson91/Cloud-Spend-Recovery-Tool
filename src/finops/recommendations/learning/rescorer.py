@@ -1,0 +1,120 @@
+"""
+rescore(): the propose-only enforcement point of the learning loop.
+
+Given a list of recommendation dicts and a customer_signal(), it ONLY:
+  - reorders them by a learned score (savings x the source's confidence multiplier),
+  - annotates each with a `learned` block (verdict, why_ranked, rank change),
+  - moves suppressed-for-you sources into a separate bucket (it never deletes them).
+
+It does NOT change any recommendation's status, does NOT call the cloud, and imports
+no boto3 / MCP / mutating module. The only thing in nable that acts is a human
+clicking mark_acted_on / open_rightsizing_pr (which itself only opens a reviewable
+PR). So a degenerate "save 100% -> destroy everything" is structurally impossible:
+the output of this module is a ranked, explained proposal list, nothing more. A unit
+test enforces that this file imports nothing that can mutate cloud state.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from .signal import signal_for
+
+
+def rescore(
+    recs: list[dict],
+    signal: dict,
+    *,
+    savings_key: str = "estimated_monthly_savings_usd",
+    source_key: str = "source",
+    bucket_key: str = "environment_bucket",
+    use_context: bool = True,
+) -> dict[str, Any]:
+    """Reorder + annotate + suppress recommendations for this customer. Propose-only.
+
+    Returns {ranked, suppressed_for_you, suppressed_count, suppressed_by_context}.
+    Input recs are never mutated (each output is a copy with a `learned` block
+    added); statuses are preserved exactly.
+
+    `suppressed_by_context` holds findings a human already marked intentional (the
+    learned operating model). They are pulled out first and never ranked, so nable
+    stops re-flagging what it was told is fine. Set use_context=False to skip it.
+    """
+    suppressed_by_context: list[dict] = []
+    if use_context:
+        # Lazy relative import keeps this module's import surface pure (the propose-only
+        # guarantee test inspects rescorer's own imports); partition only reads a local
+        # table and touches no cloud.
+        try:
+            from ..context_memory import partition
+            recs, suppressed_by_context = partition(recs)
+        except Exception:
+            suppressed_by_context = []
+
+    # Cross-org priors give day-one ranking when the install has no signal of its
+    # own. Loaded once, lazily (keeps this module's import surface pure), and only
+    # applied to COLD sources, where observed act-rate hasn't taken over yet.
+    _prior_for = _segment = None
+    if use_context:  # same guard: skip in the pure-ranking unit path
+        try:
+            from ..priors import prior_for as _prior_for, segment_of
+            _segment = segment_of()
+        except Exception:
+            _prior_for = None
+
+    ranked_candidates: list[tuple[float, int, dict]] = []
+    suppressed: list[dict] = []
+
+    for i, rec in enumerate(recs):
+        src = rec.get(source_key) or "unknown"
+        s = signal_for(signal, src, bucket=rec.get(bucket_key))
+        try:
+            savings = float(rec.get(savings_key, 0) or 0)
+        except (TypeError, ValueError):
+            savings = 0.0
+        score = savings * float(s.get("confidence_multiplier", 0) or 0)
+
+        annotated = dict(rec)  # copy: never mutate the caller's recommendation
+        annotated["learned"] = {
+            "source_verdict": s["verdict"],
+            "bucket": s.get("bucket"),
+            "coverage": s["coverage"],
+            "act_rate": s["act_rate"],
+            "accuracy": s["accuracy"],
+            "confidence_multiplier": s["confidence_multiplier"],
+            "why_ranked": s["why"],
+            "original_rank": i,
+            "rank_score": round(score, 4),
+        }
+
+        # Day-one prior: on a cold source, tilt ranking toward what teams like this
+        # one actually accept, and say so. Fades automatically as the source warms.
+        if _prior_for is not None and s["coverage"] == "COLD":
+            pr = _prior_for(src, _segment)
+            if pr:
+                from ..priors import NEUTRAL_P_ACCEPT
+                score *= pr["p_accept"] / NEUTRAL_P_ACCEPT
+                annotated["learned"]["prior"] = {
+                    "p_accept": pr["p_accept"],
+                    "segment": pr["segment"],
+                    "rationale": pr["rationale"],
+                }
+                annotated["learned"]["rank_score"] = round(score, 4)
+        if s["verdict"] == "suppress":
+            suppressed.append(annotated)
+        else:
+            ranked_candidates.append((score, i, annotated))
+
+    # Highest learned score first; ties keep original order (stable).
+    ranked_candidates.sort(key=lambda t: (-t[0], t[1]))
+    ranked: list[dict] = []
+    for new_rank, (_, _, rec) in enumerate(ranked_candidates):
+        rec["learned"]["new_rank"] = new_rank
+        ranked.append(rec)
+
+    suppressed.sort(key=lambda r: float(r.get(savings_key, 0) or 0), reverse=True)
+    return {
+        "ranked": ranked,
+        "suppressed_for_you": suppressed,
+        "suppressed_count": len(suppressed),
+        "suppressed_by_context": suppressed_by_context,
+    }
