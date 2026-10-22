@@ -63,7 +63,7 @@ snowflake = ["snowflake-connector-python>=3.6.0"]
 azure-oauth = ["msal>=1.28.0"]
 azure = [
     "azure-mgmt-costmanagement>=4.0.0",
-    "azure-identity>=1.15.0",
+    "azure-identity>=1.26.0",
 ]
 gcp = [
     "google-cloud-billing>=1.13.0",
@@ -109,7 +109,7 @@ all = [
     "psycopg2-binary>=2.9.0",
     "croniter>=2.0.0",
     "azure-mgmt-costmanagement>=4.0.0",
-    "azure-identity>=1.15.0",
+    "azure-identity>=1.26.0",
     "google-cloud-billing>=1.13.0",
     "google-cloud-bigquery>=3.17.0",
     "google-cloud-compute>=1.19.0",
