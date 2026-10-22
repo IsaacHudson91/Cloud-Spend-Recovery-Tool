@@ -78,7 +78,7 @@ pdf = [
     "pillow>=12.3.0",  # constrain pdfplumber's transitive pillow off the 12.2.0 image-parsing CVEs
 ]
 slack = [
-    "slack-bolt>=1.18.0",
+    "slack-bolt>=1.30.0",
     "anthropic>=0.25.0",
 ]
 pr-comments = [
@@ -103,7 +103,7 @@ all = [
     "keyring>=25.0.0",
     "pdfplumber>=0.10.0",
     "pillow>=12.3.0",  # see [pdf] extra: keep pillow off the 12.2.0 CVEs
-    "slack-bolt>=1.18.0",
+    "slack-bolt>=1.30.0",
     "anthropic>=0.25.0",
     "kubernetes>=29.0.0",
     "psycopg2-binary>=2.9.0",
