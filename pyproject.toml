@@ -68,7 +68,7 @@ azure = [
 gcp = [
     "google-cloud-billing>=1.13.0",
     "google-cloud-bigquery>=3.17.0",
-    "google-cloud-compute>=1.19.0",
+    "google-cloud-compute>=1.56.0",
     "google-cloud-monitoring>=2.21.0",
     "google-cloud-recommender>=2.15.0",
 ]
@@ -112,7 +112,7 @@ all = [
     "azure-identity>=1.15.0",
     "google-cloud-billing>=1.13.0",
     "google-cloud-bigquery>=3.17.0",
-    "google-cloud-compute>=1.19.0",
+    "google-cloud-compute>=1.56.0",
     "google-cloud-monitoring>=2.21.0",
     "google-cloud-recommender>=2.15.0",
 ]
